@@ -5,7 +5,7 @@
 ///// CONSTANTS AND DEFINITIONS
 /////
 
-//// define I/O pinsc
+//// define I/O pins
 #define PIN_BUTTON_INT 0
 #define PIN_LED  13
 #define PIN_REED 27
@@ -16,7 +16,7 @@
 // back: 28-29
 // deck-left: 30-57
 // front: 58-60
-#define BRIGHTNESS          128     // 0-255 - 50 max recommended if powered from computer to prevent voltage drops while flashing
+#define BRIGHTNESS          255     // 0-255 - 50 max recommended if powered from computer to prevent voltage drops while flashing
 #define NUM_PIXELS          61      // total pixel count
 #define LED_TYPE            WS2811  // type of LED Stripe used
 #define COLOR_ORDER         GRB     // color order of the used LED Stripe
@@ -28,6 +28,7 @@ CRGB leds[NUM_PIXELS];
 #define SECTION_FRONT             1
 #define SECTION_BACK              2
 #define SECTION_DECKPAR           3 // 2 parallel pixels front-to-back
+#define SECTION_ALL               4
 // section start addresses
 #define SECTION_DECKRIGHT_START   0
 #define SECTION_DECKLEFT_START    30
@@ -40,7 +41,54 @@ int SECTION_DECK_PIXELS = SECTION_DECKRIGHT_PIXELS + SECTION_DECKLEFT_PIXELS;
 #define SECTION_FRONT_PIXELS      3
 #define SECTION_BACK_PIXELS       2
 
+// Stuff for interrupts and buttons
+long debouncing_time = 15; //Debouncing Time in Milliseconds
+volatile unsigned long last_millis;
+
+struct Button {
+  const uint8_t PIN;
+  uint32_t numberKeyPresses;
+  bool pressed;
+};
+
+struct RotationSensor {
+  const uint8_t PIN;
+  uint32_t numberRotations;
+  double frequency;
+  long lastChangeMillis;
+};
+
+Button button0 = {PIN_BUTTON_INT, 0, false};
+RotationSensor reed0 = {PIN_REED, 0, 0.0};
+
+// speed detection
+unsigned long rotations = 0;  // roation count since program start
+double frequency = 0.5; // rotation frequency in hz
+unsigned long rotationsLast = 0;
+double frequencyLast = 0.0;
+double millisLast = 0;
+long reedMicros = 0;
+
+// general program flow
 int lightingProgramID = 0;
+
+/////
+///// INTERRUPT ROUTINES
+/////
+
+void IRAM_ATTR button0Pressed() {
+  button0.numberKeyPresses += 1;
+  button0.pressed = true;
+}
+
+void IRAM_ATTR reed0Pressed() {
+  long current_millis = millis() -  reed0.lastChangeMillis;
+  if(current_millis >= debouncing_time) {
+    reed0.numberRotations += 1;
+    reed0.frequency = (double)1000.0/(current_millis);  
+    reed0.lastChangeMillis = millis();
+  }
+}
 
 /////
 ///// SETUP FUNCTION
@@ -52,6 +100,10 @@ delay(2000);
 Serial.begin(9600);
 Serial.println("\nstarting bootup...");
 pinMode(PIN_BUTTON_INT, INPUT_PULLUP);
+pinMode(PIN_REED, INPUT_PULLUP);
+reed0.frequency = 0.00001;
+attachInterrupt(PIN_BUTTON_INT, button0Pressed, FALLING);
+attachInterrupt(PIN_REED, reed0Pressed, RISING);
 FastLED.addLeds<LED_TYPE, PIN_LED, COLOR_ORDER>(leds, NUM_PIXELS).setCorrection( TypicalLEDStrip );
 FastLED.setBrightness(BRIGHTNESS);
 Serial.println("system booted.");
@@ -62,35 +114,52 @@ Serial.println("system booted.");
 /////
 
 void loop() {
-  bool buttonPress = ! digitalRead(PIN_BUTTON_INT);
 
-  if (buttonPress) {
+  // read out onboard boot button
+  if (button0.pressed) {
     lightingProgramID = (lightingProgramID+1)%2;
+    button0.pressed = false;
   }
 
+  // lighting program 1
   if (lightingProgramID == 0) {
-    // back static color
-    colorSection(SECTION_BACK,200,0,0);
-    // deck static color
-    colorSection(SECTION_DECK,200,0,0);
-    // front pingpong
-    effectPingPong(SECTION_FRONT,0,50,0,150);
+    // driving scene
+    if (millis()-reed0.lastChangeMillis <= 1500) {
+      // back static color
+      colorSection(SECTION_BACK,100,0,0);
+      // front static color
+      colorSection(SECTION_FRONT,0,30,3);
+      // deck cycle (speed sensitive)
+      effectCycleSpeed(SECTION_DECKPAR,0,100,20);
+    }
+    // standing scene
+    else {
+      // back static color
+      //colorSection(SECTION_BACK,70,0,0);
+      // deck pulse
+      //effectPulse(SECTION_DECK,0,100,20,9);
+      // front static
+      //colorSection(SECTION_FRONT,0,30,3);
+      // all pulse
+     effectPulse(SECTION_ALL,0,100,20,9);
+    } 
   }
-  
-  else if (lightingProgramID == 1) {
-    // back static color
-    colorSection(SECTION_BACK,200,0,0);
-    // front static color
-    colorSection(SECTION_FRONT,0,50,0);
-    // deck pingpong (front-to-back)
-    effectCycle(SECTION_DECKPAR,255,0,0,50);
-  }
-  
-  // deck pulse
-  //effectPulse(SECTION_DECK,255,0,0,10);
 
-    
-  delay(1);
+  // lighting program 2
+  else if (lightingProgramID == 1) {    
+    // back static color
+    colorSection(SECTION_BACK,70,0,0);
+    // deck static color
+    //colorSection(SECTION_DECK,0,100,20);
+    // deck pulse
+    effectPulse(SECTION_DECK,0,100,20,9);
+    // front pingpong
+    //effectPingPong(SECTION_FRONT,0,30,3,150);
+    // front static
+    colorSection(SECTION_FRONT,0,30,3);
+  }
+
+  //delay(1);
 }
 
 /////
@@ -108,7 +177,7 @@ void loop() {
 // Deck Parallel Pixels: 28 channels (0 - 27)
 void colorPixel(int section, int ch, int r, int g, int b) {
   // deck pixels (going round)
-  if (section == 0) {
+  if (section == SECTION_DECK) {
     // map deck pixels on both sides to sequential addresses
     if ( ch >= 0 && ch < (SECTION_DECK_PIXELS/2)) {
       leds[ch].setRGB(r,g,b);
@@ -118,22 +187,27 @@ void colorPixel(int section, int ch, int r, int g, int b) {
     }
   }
   // front pixels
-  else if (section == 1) {
+  else if (section == SECTION_FRONT) {
     if ( ch >= 0 && ch < SECTION_FRONT_PIXELS) {
       leds[ch+58].setRGB(r,g,b);
     }
   }
   // back pixels
-  else if (section == 2) {
+  else if (section == SECTION_BACK) {
     if ( ch >= 0 && ch < SECTION_BACK_PIXELS) {
       leds[ch+28].setRGB(r,g,b);
     }
   }
   // deck pixels (2 parallel, front-to-back)
-  else if (section == 3) {
+  else if (section == SECTION_DECKPAR) {
     if ( ch >= 0 && ch < SECTION_DECKRIGHT_PIXELS) {
       leds[ch].setRGB(r,g,b);
       leds[57-ch].setRGB(r,g,b);
+    }
+  }
+  else if (section == SECTION_ALL) {
+    if ( ch >= 0 && ch < NUM_PIXELS) {
+      leds[ch].setRGB(r,g,b);
     }
   }
 }
@@ -154,12 +228,11 @@ void colorSection(int section, int r, int g, int b) {
   else if (section == SECTION_DECKPAR) {
     n = SECTION_DECKRIGHT_PIXELS;
   }
+  else if (section == SECTION_ALL) {
+    n = NUM_PIXELS;
+  }
   for (int i = 0; i < n; i++) {
     colorPixel(section,i,r,g,b);
-    // TODO: Remove this if if it has really proven as irrelevant
-    //if (section == 3) {
-    //  colorPixel(section,i*2,r,g,b);
-    //}
   }
 }
 
@@ -244,6 +317,34 @@ void effectCycle(int section, int r, int g, int b, int time) {
     colorPixel(section,i,r,g,b);
     FastLED.show();
     colorPixel(section,i,0,0,0);
+    delay(time);
+  }  
+}
+
+// Speed sensitive cycle effect
+void effectCycleSpeed(int section, int r, int g, int b) {
+  int n = 0;
+  if (section == SECTION_DECK) {
+    n = SECTION_DECK_PIXELS;
+  }
+  else if (section == SECTION_FRONT) {
+    n = SECTION_FRONT_PIXELS;
+  }
+  else if (section == SECTION_BACK) {
+    n = SECTION_BACK_PIXELS;
+  }
+  else if (section == SECTION_DECKPAR) {
+    n = SECTION_DECKRIGHT_PIXELS;
+  }
+  for (int i=0; i<n; i++) {
+    colorPixel(section,i,r,g,b);
+    FastLED.show();
+    colorPixel(section,i,0,0,0);
+    //int time = 60-(6*reed0.frequency);
+    int time = (double)60.0/(reed0.frequency);
+    if (time > 200) {
+      time = 200;
+    }
     delay(time);
   }  
 }

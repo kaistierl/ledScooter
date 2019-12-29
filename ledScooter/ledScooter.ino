@@ -1,4 +1,3 @@
-
 #include <FastLED.h>
 
 /////
@@ -66,26 +65,41 @@ RotationSensor reed0 = {PIN_REED, 0, 0.00001, 0}; // reed contact for speed dete
 
 //// general variables
 int lightingProgramID = 0;  // ID of the currently running program / scene
+bool brake = false;
+int brakeCounter = 0;
 
 /////
 ///// INTERRUPT ROUTINES
 /////
 
-// button0 handling
+// button0 interrupt handler
 void IRAM_ATTR button0Pressed() {
-  if((millis()-button0.lastChangeMillis) >= debouncing_time) {
+  if ((millis() - button0.lastChangeMillis) >= debouncing_time) {
     button0.numberKeyPresses += 1;
     button0.pressed = true;
     button0.lastChangeMillis = millis();
   }
 }
 
-//  reed sensor handling
+//  reed sensor interrupt handler
 void IRAM_ATTR reed0Pressed() {
-  long current_millis = millis()-reed0.lastChangeMillis;
-  if(current_millis >= debouncing_time) {
+  long current_millis = millis() - reed0.lastChangeMillis;
+  if (current_millis >= debouncing_time) {
+    double currentFrequency = (double)1000.0/(current_millis);
+    // TEST: Brake
+    //if (reed0.frequency-currentFrequency  > reed0.frequency*0.1 && reed0.frequency-currentFrequency  > 0.4) {
+    if (reed0.frequency-currentFrequency  > reed0.frequency*0.07) {
+      brakeCounter += 1;
+      //brake = true;
+    }
+    else {
+      brakeCounter = 0;
+      brake = false;
+    }
+    brake = (brakeCounter >= 2);
+    
     reed0.numberRotations += 1;
-    reed0.frequency = (double)1000.0/(current_millis);  
+    reed0.frequency = currentFrequency;
     reed0.lastChangeMillis = millis();
   }
 }
@@ -96,22 +110,22 @@ void IRAM_ATTR reed0Pressed() {
 
 void setup()
 {
-// initial safety delay
-delay(2000);
-// initialize serial communication
-Serial.begin(9600);
-Serial.println("\nstarting bootup...");
-// set pin modes
-pinMode(PIN_BUTTON_INT, INPUT_PULLUP);
-pinMode(PIN_REED, INPUT_PULLUP);
-// initialize interrupts
-attachInterrupt(PIN_BUTTON_INT, button0Pressed, FALLING);
-attachInterrupt(PIN_REED, reed0Pressed, RISING);
-// initialize fastLED stuff
-FastLED.addLeds<LED_TYPE, PIN_LED, COLOR_ORDER>(leds, NUM_PIXELS).setCorrection( TypicalLEDStrip );
-FastLED.setBrightness(BRIGHTNESS);
-// setup finished.
-Serial.println("system booted.");
+  // initial safety delay
+  delay(2000);
+  // initialize serial communication
+  Serial.begin(9600);
+  Serial.println("\nstarting bootup...");
+  // set pin modes
+  pinMode(PIN_BUTTON_INT, INPUT_PULLUP);
+  pinMode(PIN_REED, INPUT_PULLUP);
+  // initialize interrupts
+  attachInterrupt(PIN_BUTTON_INT, button0Pressed, FALLING);
+  attachInterrupt(PIN_REED, reed0Pressed, RISING);
+  // initialize fastLED stuff
+  FastLED.addLeds<LED_TYPE, PIN_LED, COLOR_ORDER>(leds, NUM_PIXELS).setCorrection( TypicalLEDStrip );
+  FastLED.setBrightness(BRIGHTNESS);
+  // setup finished.
+  Serial.println("system booted.");
 }
 
 /////
@@ -123,46 +137,42 @@ void loop() {
   //// button processing
   // onboard 'boot' button - cycles through programs
   if (button0.pressed) {
-    lightingProgramID = (lightingProgramID+1)%2;
+    lightingProgramID = (lightingProgramID + 1) % 2;
     button0.pressed = false;
   }
 
   // lighting program 1
   if (lightingProgramID == 0) {
     // driving scene
-    if (millis()-reed0.lastChangeMillis <= 1500) {
+    if (millis() - reed0.lastChangeMillis <= 1500) {
+      //FastLED.clear();
       // back static color
-      colorSection(SECTION_BACK,100,0,0);
+      colorSection(SECTION_BACK, 15, 0, 0);
       // front static color
-      colorSection(SECTION_FRONT,0,30,3);
+      colorSection(SECTION_FRONT, 0, 30, 10);
       // deck cycle (speed sensitive)
-      effectCycleSpeed(SECTION_DECKPAR,0,100,20);
+      effectCycleSpeed(SECTION_DECKPAR, 0, -1, -1, 3);
     }
     // standing scene
     else {
-      // back static color
-      //colorSection(SECTION_BACK,70,0,0);
-      // deck pulse
-      //effectPulse(SECTION_DECK,0,100,20,9);
-      // front static
-      //colorSection(SECTION_FRONT,0,30,3);
+      //FastLED.clear();
       // all pulse
-     effectPulse(SECTION_ALL,0,100,20,9);
-    } 
+      effectPulse(SECTION_ALL, 0, 0, 50, 5);
+    }
   }
 
   // lighting program 2
-  else if (lightingProgramID == 1) {    
+  else if (lightingProgramID == 1) {
     // back static color
-    colorSection(SECTION_BACK,70,0,0);
+    colorSection(SECTION_BACK, 70, 0, 0);
     // deck static color
     //colorSection(SECTION_DECK,0,100,20);
     // deck pulse
-    effectPulse(SECTION_DECK,0,100,20,9);
+    effectPulse(SECTION_DECK, 0, 100, 20, 9);
     // front pingpong
-    //effectPingPong(SECTION_FRONT,0,30,3,150);
+    //effectPingPong(SECTION_FRONT,0,30,3,3,150);
     // front static
-    colorSection(SECTION_FRONT,0,30,3);
+    colorSection(SECTION_FRONT, 0, 30, 3);
   }
 }
 
@@ -178,42 +188,55 @@ void colorPixel(int section, int ch, int r, int g, int b) {
   // deck pixels (going round)
   if (section == SECTION_DECK) {
     // map deck pixels on both sides to sequential addresses (leave out the back section's pixels)
-    if ( ch >= 0 && ch < (SECTION_DECK_PIXELS/2)) {
-      leds[ch].setRGB(r,g,b);
+    if ( ch >= 0 && ch < (SECTION_DECK_PIXELS / 2)) {
+      leds[ch].setRGB(r, g, b);
     }
     else if (ch >= 0 && ch < SECTION_DECK_PIXELS) {
-      leds[ch+2].setRGB(r,g,b);
+      leds[ch + 2].setRGB(r, g, b);
     }
   }
   // front pixels
   else if (section == SECTION_FRONT) {
     if ( ch >= 0 && ch < SECTION_FRONT_PIXELS) {
-      leds[ch+SECTION_FRONT_START].setRGB(r,g,b);
+      leds[ch + SECTION_FRONT_START].setRGB(r, g, b);
     }
   }
   // back pixels
   else if (section == SECTION_BACK) {
     if ( ch >= 0 && ch < SECTION_BACK_PIXELS) {
-      leds[ch+SECTION_BACK_START].setRGB(r,g,b);
+      leds[ch + SECTION_BACK_START].setRGB(r, g, b);
     }
   }
   // deck pixels (2 parallel, front-to-back)
   else if (section == SECTION_DECKPAR) {
     if ( ch >= 0 && ch < SECTION_DECKRIGHT_PIXELS) {
-      leds[ch].setRGB(r,g,b);
-      leds[57-ch].setRGB(r,g,b);
+      leds[ch].setRGB(r, g, b);
+      leds[57 - ch].setRGB(r, g, b);
     }
   }
   else if (section == SECTION_ALL) {
     if ( ch >= 0 && ch < NUM_PIXELS) {
-      leds[ch].setRGB(r,g,b);
+      leds[ch].setRGB(r, g, b);
     }
   }
 }
 
 // Section Color: Sets all pixels in a section
 void colorSection(int section, int r, int g, int b) {
-  int n = 0;
+  int n = sectionPixelCount(section);
+  for (int i = 0; i < n; i++) {
+    colorPixel(section, i, r, g, b);
+  }
+}
+
+/////
+///// HELPER FUNCTIONS
+/////
+///// Some general helper functions
+/////
+
+int sectionPixelCount(int section) {
+  int n;
   if (section == SECTION_DECK) {
     n = SECTION_DECK_PIXELS;
   }
@@ -229,32 +252,7 @@ void colorSection(int section, int r, int g, int b) {
   else if (section == SECTION_ALL) {
     n = NUM_PIXELS;
   }
-  for (int i = 0; i < n; i++) {
-    colorPixel(section,i,r,g,b);
-  }
-}
-
-/////
-///// HELPER FUNCTIONS
-/////
-///// Some general helper functions
-/////
-
-int sectionPixelCount(int section){
-  int n;
-  if (section == SECTION_DECK) {
-    n = SECTION_DECK_PIXELS;
-  }
-  else if (section == SECTION_FRONT) {
-    n = SECTION_FRONT_PIXELS;
-  }
-  else if (section == SECTION_BACK) {
-    n = SECTION_BACK_PIXELS;
-  }
-  else if (section == SECTION_DECKPAR) {
-    n = SECTION_DECKRIGHT_PIXELS;
-  }
-  return n; 
+  return n;
 }
 
 /////
@@ -268,11 +266,11 @@ int sectionPixelCount(int section){
 // time argument controls time in milliseconds between steps.
 void effectStrobe (int section, int r, int g, int b, int time) {
   // effect has two steps - lights on and lights off
-  for (int i=0; i<2; i++) {
-    colorSection(section,r,g,b);
+  for (int i = 0; i < 2; i++) {
+    colorSection(section, r, g, b);
     FastLED.show();
-    colorSection(section,0,0,0);
-    delay(time);   
+    colorSection(section, 0, 0, 0);
+    delay(time);
   }
 }
 
@@ -284,38 +282,38 @@ void effectPulse(int section, int r, int g, int b, int time) {
   int green = 0;
   int blue = 0;
   // effect has 510 steps (two times the rgb value range)
-  for (int i=0; i<=510; i++) {
+  for (int i = 0; i <= 510; i++) {
     // dim up for first 255 steps
-    if (i<=255) {
+    if (i <= 255) {
       // set current color values for red, green and blue
       if (r > 0) {
-        red = ((double)i/255.0)*(double)r;
+        red = ((double)i / 255.0) * (double)r;
       }
       else {
-        red = 0;  
+        red = 0;
       }
       if (g > 0) {
-        green = ((double)i/255.0)*(double)g;
+        green = ((double)i / 255.0) * (double)g;
       }
       else {
-        green = 0;  
+        green = 0;
       }
       if (b > 0) {
-        blue = ((double)i/255.0)*(double)b;
+        blue = ((double)i / 255.0) * (double)b;
       }
       else {
-        blue = 0;  
+        blue = 0;
       }
     }
     // dim down for last 255 steps
     else {
       // set current color values for red, green and blue
-      red = (r*2) - ((double)i/255.0)*(double)r;
-      green = (g*2) - ((double)i/255.0)*(double)g;
-      blue = (b*2) - ((double)i/255.0)*(double)b; 
+      red = (r * 2) - ((double)i / 255.0) * (double)r;
+      green = (g * 2) - ((double)i / 255.0) * (double)g;
+      blue = (b * 2) - ((double)i / 255.0) * (double)b;
     }
     // set the section's current color
-    colorSection(section,red,green,blue);
+    colorSection(section, red, green, blue);
     // show it
     FastLED.show();
     // wait for next step
@@ -325,69 +323,111 @@ void effectPulse(int section, int r, int g, int b, int time) {
 
 // Cycle: Lights up all individual pixels in a section sequentially (cycles through all addresses)
 // time argument controls time in milliseconds between steps
-void effectCycle(int section, int r, int g, int b, int time) {
+void effectCycle(int section, int r, int g, int b, int width, int time) {
+  // set random number if color is set to -1
+  if (r == -1) {
+    r = random(0, 256);
+  }
+  if (g == -1) {
+    g = random(0, 256);
+  }
+  if (b == -1) {
+    b = random(0, 256);
+  }
   // set effect step count equal to number of pixels in the section
-  int n = sectionPixelCount(section);
+  int steps = sectionPixelCount(section);
   // iterate through all pixels in the section
-  for (int i=0; i<n; i++) {
-    // set the pixel's current color
-    colorPixel(section,i,r,g,b);
+  for (int i = 0; i < steps; i++) {
+    // set the pixels current color
+    for (int n = 0; n < width; n++) {
+      colorPixel(section, (i + n), r, g, b);
+    }
     // show it
     FastLED.show();
-    // set the pixel off again so that it will turn of with next show
-    colorPixel(section,i,0,0,0);
+    // set the pixels off again so that it will turn of with next show
+    for (int n = 0; n < width; n++) {
+      colorPixel(section, (i + n), 0, 0, 0);
+    }
     // wait for next step
     delay(time);
-  }  
+  }
 }
 
 // CycleSpeed: Lights up all individual pixels in a section sequentially, going faster when driving faster (cycles through all addresses)
-void effectCycleSpeed(int section, int r, int g, int b) {
+void effectCycleSpeed(int section, int r, int g, int b, int width) {
+  // set random number if color is set to -1
+  if (r == -1) {
+    r = random(0, 256);
+  }
+  if (g == -1) {
+    g = random(0, 256);
+  }
+  if (b == -1) {
+    b = random(0, 256);
+  }
   // set effect step count equal to number of pixels in the section
-  int n = sectionPixelCount(section);;
+  int steps = sectionPixelCount(section);
   // iterate through all pixels in the section
-  for (int i=0; i<n; i++) {
-    // set the pixel's current color
-    colorPixel(section,i,r,g,b);
+  for (int i = 0; i < steps; i++) {
+     // TEST: Brake light
+    if (brake) {
+      colorSection(SECTION_BACK,255,0,0);
+      colorSection(SECTION_FRONT,255,0,0);
+    }
+    else {
+      colorSection(SECTION_BACK,15,0,0);
+      colorSection(SECTION_FRONT,0,30,10);
+    }
+    // set the pixels current color
+    for (int n = 0; n < width; n++) {
+      colorPixel(section, (i + n), r, g, b);
+    }
     // show it
     FastLED.show();
-    // set the pixel off again so that it will turn of with next show
-    colorPixel(section,i,0,0,0);
+    // set the pixels off again so that it will turn of with next show
+    for (int n = 0; n < width; n++) {
+      colorPixel(section, (i + n), 0, 0, 0);
+    }
     // set the current step duration according to driving speed
-    int time = (double)60.0/(reed0.frequency);
+    int time = (double)60.0 / (reed0.frequency);
     // maximum step duration
     if (time > 200) {
       time = 200;
     }
     // wait for next step
     delay(time);
-  }  
+  }
 }
 
 // PingPong: Lights up all individual pixels in a section sequentially (walking the address range up  and down)
 // time argument controls time in milliseconds between steps
-void effectPingPong(int section, int r, int g, int b, int time) {
+// TODO: Implement dynamic width
+void effectPingPong(int section, int r, int g, int b, int width, int time) {
   // set effect step count equal to number of pixels in the section
   int n = sectionPixelCount(section);
   // set current pixel
   int currentPixel = 0;
   // iterate thorugh all pixels, going up and down (and not using boundary pixels twice)
-  for (int i=0; i<(n*2)-2; i++) {
+  for (int i = 0; i < (n * 2) - 2; i++) {
     // cycle going up
-    if (i<=n-1) {
+    if (i <= n - 1) {
       currentPixel = i;
     }
     // cycle going down
     else {
-      currentPixel = (n*2)-2-i;
+      currentPixel = (n * 2) - 2 - i;
     }
     // set the pixel's current color
-    colorPixel(section,currentPixel,r,g,b);
+    colorPixel(section, currentPixel, r, g, b);
+    // set the pixels current color
+    //for (int n=0; n<width; n++) {
+    //  colorPixel(section,(currentPixel+n),r,g,b);
+    //}
     // show it
     FastLED.show();
     // set the pixel off again so that it will turn of with next show
-    colorPixel(section,currentPixel,0,0,0);  
+    colorPixel(section, currentPixel, 0, 0, 0);
     // wait for next step
     delay(time);
-  }  
+  }
 }

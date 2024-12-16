@@ -9,14 +9,14 @@
 #define PIN_LED  13
 #define PIN_REED 27
 
-//// Initialize FastLED Library with 61 WS2811 pixels
+//// Initialize FastLED Library with 60 WS2811 pixels
 // Channels:
-// deck-right: 0-27
-// back: 28-29
-// deck-left: 30-57
-// front: 58-60
+// deck-right: 0-27 (28px)
+// back: 28-29 (2px)
+// deck-left: 30-56 (27px)
+// front: 57-59 (3px)
 #define BRIGHTNESS          255     // 0-255 - 50 max recommended if powered from computer to prevent voltage drops while flashing
-#define NUM_PIXELS          61      // total pixel count
+#define NUM_PIXELS          60      // total pixel count
 #define LED_TYPE            WS2811  // type of LED Stripe used
 #define COLOR_ORDER         GRB     // color order of the used LED Stripe
 CRGB leds[NUM_PIXELS];
@@ -28,16 +28,16 @@ CRGB leds[NUM_PIXELS];
 #define SECTION_DECK              0 // individual pixels going round - 56 pixels
 #define SECTION_FRONT             1 // 3 pixels
 #define SECTION_BACK              2 // 2 pixels
-#define SECTION_DECKPAR           3 // 2 parallel pixels front-to-back - 28 channels
-#define SECTION_ALL               4 // all pixels // 61 channels
+#define SECTION_DECKPAR           3 // 2 parallel pixels front-to-back - 27 channels
+#define SECTION_ALL               4 // all pixels // 60 channels
 // section physical start addresses
 #define SECTION_DECKRIGHT_START   0
 #define SECTION_DECKLEFT_START    30
 #define SECTION_BACK_START        28
-#define SECTION_FRONT_START       58
+#define SECTION_FRONT_START       57
 // pixel count per section
 #define SECTION_DECKRIGHT_PIXELS  28
-#define SECTION_DECKLEFT_PIXELS   28
+#define SECTION_DECKLEFT_PIXELS   27
 int SECTION_DECK_PIXELS = SECTION_DECKRIGHT_PIXELS + SECTION_DECKLEFT_PIXELS;
 #define SECTION_FRONT_PIXELS      3
 #define SECTION_BACK_PIXELS       2
@@ -188,7 +188,7 @@ void colorPixel(int section, int ch, int r, int g, int b) {
   // deck pixels (going round)
   if (section == SECTION_DECK) {
     // map deck pixels on both sides to sequential addresses (leave out the back section's pixels)
-    if ( ch >= 0 && ch < (SECTION_DECK_PIXELS / 2)) {
+    if ( ch >= 0 && ch < SECTION_DECKRIGHT_PIXELS) {
       leds[ch].setRGB(r, g, b);
     }
     else if (ch >= 0 && ch < SECTION_DECK_PIXELS) {
@@ -209,9 +209,9 @@ void colorPixel(int section, int ch, int r, int g, int b) {
   }
   // deck pixels (2 parallel, front-to-back)
   else if (section == SECTION_DECKPAR) {
-    if ( ch >= 0 && ch < SECTION_DECKRIGHT_PIXELS) {
+    if ( ch >= 0 && ch < SECTION_DECKLEFT_PIXELS) {
       leds[ch].setRGB(r, g, b);
-      leds[57 - ch].setRGB(r, g, b);
+      leds[56 - ch].setRGB(r, g, b);
     }
   }
   else if (section == SECTION_ALL) {

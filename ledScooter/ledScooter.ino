@@ -45,6 +45,7 @@ int SECTION_DECK_PIXELS = SECTION_DECKRIGHT_PIXELS + SECTION_DECKLEFT_PIXELS;
 //// Stuff for interrupts and buttons
 // Debouncing
 long debouncing_time = 30; // debouncing Time in Milliseconds
+long debouncing_time_reed = 100; // debouncing Time in Milliseconds
 // Struct for physical button
 struct Button {
   const uint8_t PIN; // GPIO used
@@ -60,13 +61,19 @@ struct RotationSensor {
   long lastChangeMillis; // timestamp of last sensor trigger
 };
 // initialize data structures for buttons and sensors
-Button button0 = {PIN_BUTTON_INT, 0, false, 0}; // onboard boot button
-RotationSensor reed0 = {PIN_REED, 0, 0.00001, 0}; // reed contact for speed detection
+Button button0 = {PIN_BUTTON_INT, 0, false, millis()}; // onboard boot button
+RotationSensor reed0 = {PIN_REED, 0, 0.00001, millis()}; // reed contact for speed detection
 
 //// general variables
 int lightingProgramID = 0;  // ID of the currently running program / scene
 bool brake = false;
 int brakeCounter = 0;
+bool driving = false;
+int drivingReedThreshold = 1500;
+
+void updateDrivingState() {
+  driving = (millis() > drivingReedThreshold && millis() - reed0.lastChangeMillis <= drivingReedThreshold);
+}
 
 /////
 ///// INTERRUPT ROUTINES
@@ -84,9 +91,9 @@ void IRAM_ATTR button0Pressed() {
 //  reed sensor interrupt handler
 void IRAM_ATTR reed0Pressed() {
   long current_millis = millis() - reed0.lastChangeMillis;
-  if (current_millis >= debouncing_time) {
+  if (current_millis >= debouncing_time_reed) {
     double currentFrequency = (double)1000.0/(current_millis);
-    // TEST: Brake
+    // TEST: Handle Brake
     //if (reed0.frequency-currentFrequency  > reed0.frequency*0.1 && reed0.frequency-currentFrequency  > 0.4) {
     if (reed0.frequency-currentFrequency  > reed0.frequency*0.07) {
       brakeCounter += 1;
@@ -101,6 +108,9 @@ void IRAM_ATTR reed0Pressed() {
     reed0.numberRotations += 1;
     reed0.frequency = currentFrequency;
     reed0.lastChangeMillis = millis();
+
+    // Update driving flag
+    updateDrivingState();
   }
 }
 
@@ -111,7 +121,7 @@ void IRAM_ATTR reed0Pressed() {
 void setup()
 {
   // initial safety delay
-  delay(2000);
+  delay(500);
   // initialize serial communication
   Serial.begin(9600);
   Serial.println("\nstarting bootup...");
@@ -133,7 +143,6 @@ void setup()
 /////
 
 void loop() {
-
   //// button processing
   // onboard 'boot' button - cycles through programs
   if (button0.pressed) {
@@ -141,38 +150,41 @@ void loop() {
     button0.pressed = false;
   }
 
+  // update driving flag
+ updateDrivingState();
+
   // lighting program 1
   if (lightingProgramID == 0) {
     // driving scene
-    if (millis() - reed0.lastChangeMillis <= 1500) {
+    if (driving) {
       //FastLED.clear();
-      // back static color
-      colorSection(SECTION_BACK, 15, 0, 0);
       // front static color
       colorSection(SECTION_FRONT, 0, 30, 10);
+      // back static color red
+      colorSection(SECTION_BACK, 15, 0, 0);
       // deck cycle (speed sensitive)
-      effectCycleSpeed(SECTION_DECKPAR, 0, -1, -1, 3);
+      effectDrivingCycle(SECTION_DECKPAR, 0, -1, -1, 3, "none");
     }
     // standing scene
     else {
       //FastLED.clear();
-      // all pulse
-      effectPulse(SECTION_ALL, 0, 0, 50, 5);
+      // front static color greenish
+      colorSection(SECTION_FRONT, 0, 30, 3);
+      // back static color red
+      colorSection(SECTION_BACK, 15, 0, 0);
+      // deck pulse greenish
+      effectPulse(SECTION_DECK, 0, 75, 15, 9, "driving");
     }
   }
 
   // lighting program 2
   else if (lightingProgramID == 1) {
-    // back static color
-    colorSection(SECTION_BACK, 70, 0, 0);
+    // all pulse blue
+    effectPulse(SECTION_ALL, 0, 0, 50, 6, "none");
     // deck static color
     //colorSection(SECTION_DECK,0,100,20);
-    // deck pulse
-    effectPulse(SECTION_DECK, 0, 100, 20, 9);
     // front pingpong
     //effectPingPong(SECTION_FRONT,0,30,3,3,150);
-    // front static
-    colorSection(SECTION_FRONT, 0, 30, 3);
   }
 }
 
@@ -277,7 +289,7 @@ void effectStrobe (int section, int r, int g, int b, int time) {
 // Pulse: Pixels in a section dim up and down
 // time argument controls time in milliseconds between steps (with 511 steps per cycle):
 // a time of 2ms is around 1s cycle time
-void effectPulse(int section, int r, int g, int b, int time) {
+void effectPulse(int section, int r, int g, int b, int time, String exitOn) {
   int red = 0;
   int green = 0;
   int blue = 0;
@@ -316,6 +328,16 @@ void effectPulse(int section, int r, int g, int b, int time) {
     colorSection(section, red, green, blue);
     // show it
     FastLED.show();
+    // clear buffer and exit effect immediately when scooter driving state has changed
+    updateDrivingState();
+    if (exitOn.equals("driving") && driving) {
+      FastLED.clear();
+      return;
+    }
+    else if (exitOn.equals("standing") && !driving) {
+      FastLED.clear();
+      return;
+    }
     // wait for next step
     delay(time);
   }
@@ -353,8 +375,8 @@ void effectCycle(int section, int r, int g, int b, int width, int time) {
   }
 }
 
-// CycleSpeed: Lights up all individual pixels in a section sequentially, going faster when driving faster (cycles through all addresses)
-void effectCycleSpeed(int section, int r, int g, int b, int width) {
+// Driving Cycle: Lights up all individual pixels in a section sequentially, going faster when driving faster (cycles through all addresses). Includes brake lights
+void effectDrivingCycle(int section, int r, int g, int b, int width, String exitOn) {
   // set random number if color is set to -1
   if (r == -1) {
     r = random(0, 256);
@@ -393,6 +415,16 @@ void effectCycleSpeed(int section, int r, int g, int b, int width) {
     // maximum step duration
     if (time > 200) {
       time = 200;
+    }
+    // clear buffer and exit effect immediately when scooter driving state has changed
+    updateDrivingState();
+    if (exitOn.equals("driving") && driving) {
+      FastLED.clear();
+      return;
+    }
+    else if (exitOn.equals("standing") && !driving) {
+      FastLED.clear();
+      return;
     }
     // wait for next step
     delay(time);
